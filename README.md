@@ -9,8 +9,6 @@ rays per pixel, collimated or focused light, flat or Gaussian pixels.
 
 <img src="doc/img/png_modes/png_gaussian_focused_projection_focus.png" alt="Example projection PNG converted to focused Gaussian-pixel rays: projection-plane and focus-plane intensity maps" width="900" />
 
-Works on its own or as a MIRAGE submodule (`programs/raygenerators`).
-
 ## Quick start: PNG → rays
 
 ```bash
@@ -179,12 +177,6 @@ ray (origin, direction, energy).
 
 ```bash
 python3 projectionImageGen.py --config path/to/case.raygen.toml
-```
-
-Inside MIRAGE, run from the MIRAGE root:
-
-```bash
-python3 programs/raygenerators/projectionImageGen.py --config <config.toml>
 ```
 
 To call it from any directory, add the repo to `PATH` (e.g. in `~/.bashrc`):
