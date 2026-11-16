@@ -1,0 +1,37 @@
+# PNG emission-mode example: frame_0001.png at a coarse 40-unit pitch (27 x 48 DMD pixels)
+[projection]
+width = 1080.0
+height = 1920.0
+axis = "y"
+direction = 1
+focus_plane_position = 50.0
+source_plane_position = -200.0
+center = [0.0, 0.0]
+
+[emission]
+origin_type = "pixelated"
+base_intensity = 1.0
+
+[focus]
+mode = "focused"
+cone_half_angle_deg = 8.0
+
+[mask]
+type = "png"
+png_path = "../png2ry/frames/frame_0001.png"
+pixel_pitch = [40.0, 40.0]
+offset = [0.0, 0.0]
+
+[pixels]
+rays_per_pixel = 2000
+bins_per_pixel = [5, 5]
+intensity_mode = "gaussian"
+gaussian_size_type = "1/e2_diameter"
+
+
+[output]
+output_folder = "./output"
+output_filename = "png_gaussian_focused.ry"
+overwrite = true
+seed = 42
+batch_count = 1
