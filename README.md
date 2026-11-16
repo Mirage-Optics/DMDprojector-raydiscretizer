@@ -1,171 +1,162 @@
 # DMDprojector-raydiscretizer
 
-<img src="doc/img/raygenerators/annulus_gaussian_antialiased_focused_projection_focus.png" alt="Focused annulus projection and focus maps generated from a DMD light model" width="900" />
+Turns DMD projector images (PNG frames) into ray files (`.ry`) for
+geometric-optics / GRIN ray tracing (e.g. [MIRAGE](https://github.com/Mirage-Optics)).
 
-This project models light emission from a DMD (Digital Micromirror Device)
-projector, discretized into rays for geometric-optics simulation workflows.
+Every lit DMD pixel becomes a bundle of rays. The pixel's grayscale value sets
+its power, and the TOML config sets the projector optics: pixel pitch,
+rays per pixel, collimated or focused light, flat or Gaussian pixels.
 
-- The projection plane is a user-defined digitized (discretized) plane,
-  positioned between the final lens and the focus plane; it represents the DMD
-  image plane where mask and pixel activation are defined.
-- Active DMD pixels emit ray bundles with configurable per-pixel intensity:
-  `flat` or `gaussian`.
-- Emission direction can be:
-  - `collimated` (parallel rays), or
-  - `focused` (cone-sampled directions back-projected to the source plane).
-- Mask-to-pixel discretization supports:
-  - `center` activation, or
-  - `antialiased` activation using in-mask area fraction sampling.
-- Additional practical projector effects include optional in-plane projector
-  jitter (`projector_shift_max_pixels`) and optional batch-energy
-  renormalization.
+<img src="doc/img/raygenerators/annulus_gaussian_antialiased_focused_projection_focus.png" alt="Focused annulus: projection-plane and focus-plane intensity maps" width="900" />
 
-In short: this repository generates ray-discretized DMD light fields with
-configurable projector optics and pixel/mask physics for downstream ray tracing
-engines.
+Works on its own or as a MIRAGE submodule (`programs/raygenerators`).
 
-## Technical Implementation
-
-TOML-driven projector ray discretization utility for generating custom text
-`.ry` files.
-
-This repository is designed to be usable in two ways:
-
-- Standalone ray-discretization project.
-- Submodule inside MIRAGE (mounted at `programs/raygenerators`).
-
-## Setup
+## Quick start: PNG → rays
 
 ```bash
 python3 -m pip install -r requirements.txt
+python3 projectionImageGen.py --config examples/png2ry/png_mask_frame_0001_flat_1rpp.toml
 ```
 
-## Optional: Run from Any Directory
+This converts `examples/png2ry/frames/frame_0001.png` into
+`examples/png2ry/output/png_mask_frame_0001_flat_1rpp.ry`.
 
-Add the raygenerator folder to your `PATH` once, so you can call
-`projectionImageGen.py` from anywhere without full paths.
+### Minimal PNG config
 
-Append this to `~/.bashrc`:
+```toml
+[projection]
+width  = 1080.0            # projection plane size (simulation length units)
+height = 1920.0
+axis = "y"                 # propagation axis
+direction = 1              # +1 / -1 along that axis
+focus_plane_position  = 0.0
+source_plane_position = -2000.0
+center = [0.0, 0.0]
 
-```bash
-# DMDprojector launcher
-# Update this if you cloned the standalone repo elsewhere.
-DMDPROJECTOR_RAYGEN_DIR="$HOME/path/to/DMDprojector-raydiscretizer"
-if [ -d "$DMDPROJECTOR_RAYGEN_DIR" ]; then
-  export PATH="$PATH:$DMDPROJECTOR_RAYGEN_DIR"
-fi
+[emission]
+origin_type = "pixelated"
+base_intensity = 1.0       # intensity of a white (255) pixel, W/m^2
+
+[focus]
+mode = "collimated"        # or "focused" + cone_half_angle_deg
+
+[mask]
+type = "png"
+png_path = "./frames/frame_0001.png"   # single frame, or:
+# png_folder = "./frames"              # a whole projection sequence
+# frame_step = 6                       # use every 6th frame
+pixel_pitch = [10.0, 10.0] # size of one DMD pixel on the projection plane
+
+[pixels]
+rays_per_pixel = 1
+intensity_mode = "flat"    # or "gaussian"
+
+[output]
+output_folder = "./output"
+output_filename = "frame.ry"   # ignored in folder mode (frame_0007.png -> frame_0007.ry)
+rays_only = true               # skip debug PNG/NPZ maps
+seed = 42
 ```
 
-Note: The MIRAGE path (`$HOME/programs/MIRAGE/programs/raygenerators`) is only
-relevant when using this project as a submodule.
+Relative paths are resolved from the TOML file's location.
 
-Apply immediately:
+### How a PNG is read
 
-```bash
-source ~/.bashrc
+- **Grayscale = power.** Black pixels emit nothing. Other pixels emit with
+  intensity `base_intensity × gray/255`.
+- **Centered.** The image center sits at the projection-plane center
+  (`projection.center` + `mask.offset`).
+- **Pitch sets the scale.** Each PNG pixel is a cell of size
+  `mask.pixel_pitch`. For PNGs, `pixels.size` and `mask.pixel_dimension` are
+  ignored and the cell size equals the pitch.
+- **Resolution matching.** The target grid is
+  `projection.width / pitch_u × projection.height / pitch_v`:
+  - grid equals the PNG size → used 1:1;
+  - grid smaller than the PNG → each target pixel takes the mean gray value of
+    its source block (box downsampling);
+  - grid larger than the PNG → error (no upsampling).
+- **Frame sequences.** `mask.png_folder` + `mask.frame_step` handle TVAM
+  projection stacks (e.g. VAMToolbox/TOMO output). You get one `.ry` per frame,
+  named after the frame.
+
+PNG examples in [`examples/png2ry/`](examples/png2ry):
+
+| Config | What it shows |
+| --- | --- |
+| [`png_mask_frame_0001_flat_1rpp.toml`](examples/png2ry/png_mask_frame_0001_flat_1rpp.toml) | one frame, 1 ray per pixel, flat, collimated |
+| [`png_folder_every6_rays_only.toml`](examples/png2ry/png_folder_every6_rays_only.toml) | whole folder, every 6th frame, rays only |
+| [`full_fidelitypng_mask_frame_0001_flat_1rpp.toml`](examples/png2ry/full_fidelitypng_mask_frame_0001_flat_1rpp.toml) | one frame, Gaussian pixels, 250 rays/pixel, focused 8° cone |
+
+## Pixel emission modes
+
+These options control how each lit pixel turns into rays. They apply to PNG
+input and to analytic masks alike.
+
+| Key | Options | Effect |
+| --- | --- | --- |
+| `pixels.intensity_mode` | `flat`, `gaussian` | Uniform pixel, or a Gaussian whose peak equals the pixel intensity (width from `pixels.size`, `gaussian_size_type = "1/e2_diameter"`). |
+| `pixels.rays_per_pixel` | int | Rays drawn uniformly over the pixel. Each ray carries `I(x)·A/N`. |
+| `pixels.sample_size` | `[u, v]` or scalar | Area rays are drawn from. Defaults to the pixel size. Set it larger to capture Gaussian tails, smaller to sample only the core. |
+| `focus.mode` | `collimated`, `focused` | Rays parallel to the axis, or sampled in a cone of `cone_half_angle_deg` around the focus point and traced back to the source plane. |
+| `pixels.activation_mode` | `center`, `antialiased` | Analytic masks only: pixel on/off by its center, or scaled by its in-mask area fraction (`aa_samples`). |
+| `pixels.projector_shift_max_pixels` | `[u, v]` or scalar | Random in-plane projector jitter per batch, in pixel pitches (the mask stays fixed). |
+| `output.normalize_batch_energy_to_mask_power` | bool | Rescale so batch energy equals `base_intensity × mask area` exactly. |
+| `output.batch_count`, `output.save_average_maps` | int, bool | Generate several batches and optionally save averaged intensity maps. |
+
+Gallery (configs in [`examples/raygen/`](examples/raygen); large 50-unit pixels
+on a 600×600 plane, so the pixel structure is visible):
+
+| | |
+| --- | --- |
+| **Pixelated, center, flat, collimated**<br>[triangle_pixelated_flat.toml](examples/raygen/triangle_pixelated_flat.toml)<br><img src="doc/img/raygenerators/triangle_pixelated_flat_projection.png" width="380" /> | **Antialiased, flat**<br>[circle_antialiased_flat.toml](examples/raygen/circle_antialiased_flat.toml)<br><img src="doc/img/raygenerators/circle_antialiased_flat_projection.png" width="380" /> |
+| **Gaussian, center**<br>[rectangle_gaussian_pixelated.toml](examples/raygen/rectangle_gaussian_pixelated.toml)<br><img src="doc/img/raygenerators/rectangle_gaussian_pixelated_projection.png" width="380" /> | **Gaussian, antialiased**<br>[triangle_gaussian_antialiased.toml](examples/raygen/triangle_gaussian_antialiased.toml)<br><img src="doc/img/raygenerators/triangle_gaussian_antialiased_projection.png" width="380" /> |
+| **Continuous sampling (no pixels)**<br>[triangle_continuous.toml](examples/raygen/triangle_continuous.toml)<br><img src="doc/img/raygenerators/triangle_continuous_projection.png" width="380" /> | |
+
+Focused emission (left: projection plane, right: focus plane):
+
+- **Flat, center**: [annulus_pixelated_focused.toml](examples/raygen/annulus_pixelated_focused.toml)
+  <img src="doc/img/raygenerators/annulus_pixelated_focused_projection_focus.png" width="720" />
+- **Gaussian, center**: [circle_gaussian_focused.toml](examples/raygen/circle_gaussian_focused.toml)
+  <img src="doc/img/raygenerators/circle_gaussian_focused_projection_focus.png" width="720" />
+- **Gaussian, antialiased**: [annulus_gaussian_antialiased_focused.toml](examples/raygen/annulus_gaussian_antialiased_focused.toml)
+  <img src="doc/img/raygenerators/annulus_gaussian_antialiased_focused_projection_focus.png" width="720" />
+
+Projector jitter, averaged over 20 batches (left: unshifted sample, right: average):
+
+- **Antialiased**: [annulus_gaussian_antialiased_focused_avg_jitter2px.toml](examples/raygen/annulus_gaussian_antialiased_focused_avg_jitter2px.toml)
+  <img src="doc/img/raygenerators/annulus_gaussian_antialiased_focused_avg_jitter2px_projection_average.png" width="720" />
+  <img src="doc/img/raygenerators/annulus_gaussian_antialiased_focused_avg_jitter2px_focus_average.png" width="720" />
+- **Center activation**: [annulus_gaussian_center_focused_avg_jitter2px.toml](examples/raygen/annulus_gaussian_center_focused_avg_jitter2px.toml)
+  <img src="doc/img/raygenerators/annulus_gaussian_center_focused_avg_jitter2px_projection_average.png" width="720" />
+  <img src="doc/img/raygenerators/annulus_gaussian_center_focused_avg_jitter2px_focus_average.png" width="720" />
+
+## Optional: analytic masks instead of PNGs
+
+To test without an image, swap the PNG for a built-in shape:
+
+```toml
+[mask]
+type = "circle"            # rectangle | circle | triangle | annulus | png
+# shape parameters: see projectionImageGen.example.toml
 ```
 
-If needed, make the script executable:
+You can also skip pixels entirely and sample rays straight from the mask area
+with `emission.origin_type = "continuous"` and `[continuous] n_rays = ...`.
+[`projectionImageGen.example.toml`](projectionImageGen.example.toml) documents
+every key.
 
-```bash
-chmod +x "$DMDPROJECTOR_RAYGEN_DIR/projectionImageGen.py"
-```
+## Outputs
 
-## projectionImageGen.py
+- `<name>.ry`: the ray file (always).
+- Unless `rays_only = true`: an intensity map next to each `.ry`, either
+  `<stem>_projection.png` (collimated) or `<stem>_projection_focus.png`
+  (focused; both planes on shared axes and color scale).
+- With `save_average_maps = true`: `<stem>_projection_average.png/.npz`, plus
+  `<stem>_focus_average.png/.npz` when focused.
+- Map binning: flat pixels use 1 bin per pixel. Gaussian pixels use
+  `bins_per_pixel` (default 5×5). Continuous mode picks bins from ray density.
 
-Unified configurable projection ray generator.
-
-Run from this repository root:
-
-```bash
-python3 projectionImageGen.py --config projectionImageGen.example.toml
-```
-
-Generate all curated examples:
-
-```bash
-for cfg in \
-  examples/raygen/triangle_continuous.toml \
-  examples/raygen/triangle_pixelated_flat.toml \
-  examples/raygen/circle_antialiased_flat.toml \
-  examples/raygen/annulus_pixelated_focused.toml \
-  examples/raygen/rectangle_gaussian_pixelated.toml \
-  examples/raygen/triangle_gaussian_antialiased.toml \
-  examples/raygen/circle_gaussian_focused.toml \
-  examples/raygen/annulus_gaussian_antialiased_focused.toml \
-  examples/raygen/annulus_gaussian_antialiased_focused_avg_jitter2px.toml \
-  examples/raygen/annulus_gaussian_center_focused_avg_jitter2px.toml; do
-  python3 projectionImageGen.py --config "$cfg"
-done
-```
-
-When used inside MIRAGE as a submodule, run from MIRAGE root with:
-
-```bash
-python3 programs/raygenerators/projectionImageGen.py --config programs/raygenerators/examples/raygen/triangle_continuous.toml
-```
-
-After the optional PATH setup above, equivalent usage from any directory is:
-
-```bash
-projectionImageGen.py --config triangle_continuous.toml
-```
-
-Use a relative or absolute config path when the TOML is not in your current
-directory.
-
-### Supported features
-
-- Projection setup: width, height, axis, direction sign (+/-), focus/source plane positions.
-- Base intensity in W/m^2.
-- Masks: rectangle, circle, triangle, annulus (circle with central hole), png.
-- Origin types:
-  - `continuous`: sample directly in mask until `n_rays` is reached.
-  - `pixelated`: mask -> pixel activation -> ray emission.
-- Pixel activation:
-  - `center`: on/off by pixel center.
-  - `antialiased`: intensity scaling by in-mask area fraction.
-- PNG mask behavior:
-  - non-black grayscale pixels are active; black pixels are ignored.
-  - active pixel intensity is scaled by grayscale value in [0, 1].
-  - PNG center maps to projection center in local UV coordinates.
-  - effective PNG cell size is taken from `mask.pixel_pitch`.
-  - `mask.pixel_dimension` is ignored in PNG mode.
-  - set `mask.png_folder` to process a folder of PNG frames.
-  - set `mask.frame_step = N` to process every Nth frame (for example `N = 6`).
-  - in folder mode, each output keeps the source frame basename with `.ry`
-    extension (for example `frame_0007.png -> frame_0007.ry`).
-  - target mask resolution is derived from `projection.width / mask.pixel_pitch[0]`
-    and `projection.height / mask.pixel_pitch[1]`.
-  - when target pixel counts match the PNG pixel counts, no downsampling occurs.
-  - when target pixel counts are lower than the PNG, each target pixel uses the
-    average grayscale value of its source bin.
-- Pixel intensity modes:
-  - `flat`
-  - `gaussian` (peak equals activated pixel intensity)
-- Ray direction modes:
-  - `collimated` along projection direction.
-  - `focused` by sampling a cone direction and back-projecting to source plane.
-- Batch generation with indexed filenames and optional deterministic seeding.
-- Optional energy renormalization for pixelated outputs so batch energy matches
-  `base_intensity * mask_area` exactly (`output.normalize_batch_energy_to_mask_power`).
-- Optional random in-plane projector jitter for pixelated emission while keeping the
-  mask fixed (`pixels.projector_shift_max_pixels`, measured in pixel pitch units).
-- Optional ray-only output mode (`output.rays_only = true`) to write only `.ry`
-  files and skip all PNG/NPZ debug outputs.
-
-## Custom text format (`.ry`)
-
-This tool writes custom `ray file v1` text files designed for easy modular use:
-
-Trivial to parse: skip comment lines, read the ray count, then parse one row
-per ray.
-
-- ray tracing engines can consume only origin/direction/payload rows,
-- ray-discretized light models can keep generator and solver decoupled,
-- comments/header metadata remain human-readable.
-
-Format:
+## `.ry` format (ray file v1)
 
 ```text
 # ray file v1
@@ -177,107 +168,30 @@ ox oy oz dx dy dz energy
 ...
 ```
 
-Details:
+To parse: skip lines starting with `#`, read the ray count, then one row per
+ray (origin, direction, energy).
 
-- Any leading comment lines beginning with `#` are allowed.
-- First non-comment line is the number of rays.
-- Each ray row contains origin `(ox, oy, oz)`, direction `(dx, dy, dz)`, and payload.
-- In this generator, payload is written as per-ray `energy`.
+## Running
 
-## Outputs
+```bash
+python3 projectionImageGen.py --config path/to/case.raygen.toml
+```
 
-- Custom text-format `.ry` ray files.
-- Intensity-map PNG(s) saved next to each `.ry` with matching stem:
-  - `<stem>_projection.png` when `focus.mode = "collimated"`
-  - `<stem>_projection_focus.png` when `focus.mode = "focused"` (single figure with both maps)
-  - focused/projection panels in the combined figure use shared u/v axis limits
-  - focused/projection panels in the combined figure use a shared colorbar scale
-- Optional average maps across generated batches (only when `output.save_average_maps = true`):
-  - when `focus.mode = "collimated"`: `<output_stem>_projection_average.png/.npz`
-  - when `focus.mode = "focused"`: `<output_stem>_projection_average.png/.npz` and `<output_stem>_focus_average.png/.npz`
-  - average PNGs are two-panel figures: `centered sample (no shift)` (left) and `batch average` (right)
-  - both panels in each average PNG use the same colorbar scale for direct comparison
-  - `.npz` contains averaged intensity and u/v bin edges
+Inside MIRAGE, run from the MIRAGE root:
 
-## Representative Configurations (Mixed Mask Showcase)
+```bash
+python3 programs/raygenerators/projectionImageGen.py --config <config.toml>
+```
 
-The following gallery uses configs in `examples/raygen/` and PNG assets in
-`doc/img/raygenerators/`.
+To call it from any directory, add the repo to `PATH` (e.g. in `~/.bashrc`):
 
-These curated pixelated examples intentionally use large pixels (`pitch = [50, 50]` on a
-`600 x 600` projection plane) with high `rays_per_pixel` values.
+```bash
+export PATH="$PATH:$HOME/path/to/DMDprojector-raydiscretizer"
+chmod +x "$HOME/path/to/DMDprojector-raydiscretizer/projectionImageGen.py"   # once
+```
 
-1. Continuous sampling (`continuous`, `collimated`, mask: `triangle`)
+Rebuild all gallery examples:
 
-  Config: [triangle_continuous.toml](examples/raygen/triangle_continuous.toml)
-
-  <img src="doc/img/raygenerators/triangle_continuous_projection.png" alt="triangle continuous projection" width="420" />
-
-2. Pixelated center activation, flat intensity (`pixelated`, `center`, `flat`, `collimated`, mask: `triangle`)
-
-  Config: [triangle_pixelated_flat.toml](examples/raygen/triangle_pixelated_flat.toml)
-
-  <img src="doc/img/raygenerators/triangle_pixelated_flat_projection.png" alt="triangle pixelated flat projection" width="420" />
-
-3. Pixelated antialiased activation, flat intensity (`pixelated`, `antialiased`, `flat`, `collimated`, mask: `circle`)
-
-  Config: [circle_antialiased_flat.toml](examples/raygen/circle_antialiased_flat.toml)
-
-  <img src="doc/img/raygenerators/circle_antialiased_flat_projection.png" alt="circle antialiased flat projection" width="420" />
-
-4. Pixelated center activation, flat intensity, focused (`pixelated`, `center`, `flat`, `focused`, mask: `annulus`)
-
-  Config: [annulus_pixelated_focused.toml](examples/raygen/annulus_pixelated_focused.toml)
-
-  <img src="doc/img/raygenerators/annulus_pixelated_focused_projection_focus.png" alt="annulus pixelated focused projection and focus" width="720" />
-
-5. Pixelated center activation, Gaussian intensity (`pixelated`, `center`, `gaussian`, `collimated`, mask: `rectangle`)
-
-  Config: [rectangle_gaussian_pixelated.toml](examples/raygen/rectangle_gaussian_pixelated.toml)
-
-  <img src="doc/img/raygenerators/rectangle_gaussian_pixelated_projection.png" alt="rectangle gaussian pixelated projection" width="420" />
-
-6. Pixelated antialiased activation, Gaussian intensity (`pixelated`, `antialiased`, `gaussian`, `collimated`, mask: `triangle`)
-
-  Config: [triangle_gaussian_antialiased.toml](examples/raygen/triangle_gaussian_antialiased.toml)
-
-  <img src="doc/img/raygenerators/triangle_gaussian_antialiased_projection.png" alt="triangle gaussian antialiased projection" width="420" />
-
-7. Pixelated center activation, Gaussian intensity, focused (`pixelated`, `center`, `gaussian`, `focused`, mask: `circle`)
-
-  Config: [circle_gaussian_focused.toml](examples/raygen/circle_gaussian_focused.toml)
-
-  <img src="doc/img/raygenerators/circle_gaussian_focused_projection_focus.png" alt="circle gaussian focused projection and focus" width="720" />
-
-8. Pixelated antialiased activation, Gaussian intensity, focused (`pixelated`, `antialiased`, `gaussian`, `focused`, mask: `annulus`)
-
-  Config: [annulus_gaussian_antialiased_focused.toml](examples/raygen/annulus_gaussian_antialiased_focused.toml)
-
-  <img src="doc/img/raygenerators/annulus_gaussian_antialiased_focused_projection_focus.png" alt="annulus gaussian antialiased focused projection and focus" width="720" />
-
-9. Averaging case with projector jitter (`pixelated`, `antialiased`, `gaussian`, `focused`, mask: `annulus`, jitter: 5 pixels, samples: 20)
-
-  Config: [annulus_gaussian_antialiased_focused_avg_jitter2px.toml](examples/raygen/annulus_gaussian_antialiased_focused_avg_jitter2px.toml)
-
-  <img src="doc/img/raygenerators/annulus_gaussian_antialiased_focused_avg_jitter2px_projection_average.png" alt="annulus jittered projection-plane single sample and average intensity map" width="720" />
-
-  <img src="doc/img/raygenerators/annulus_gaussian_antialiased_focused_avg_jitter2px_focus_average.png" alt="annulus jittered focus-plane single sample and average intensity map" width="720" />
-
-10. Averaging case with projector jitter, no antialiasing (`pixelated`, `center`, `gaussian`, `focused`, mask: `annulus`, jitter: 5 pixels, samples: 20)
-
-  Config: [annulus_gaussian_center_focused_avg_jitter2px.toml](examples/raygen/annulus_gaussian_center_focused_avg_jitter2px.toml)
-
-  <img src="doc/img/raygenerators/annulus_gaussian_center_focused_avg_jitter2px_projection_average.png" alt="annulus jittered no-aa projection-plane single sample and average intensity map" width="720" />
-
-  <img src="doc/img/raygenerators/annulus_gaussian_center_focused_avg_jitter2px_focus_average.png" alt="annulus jittered no-aa focus-plane single sample and average intensity map" width="720" />
-
-## Intensity-map binning
-
-- Pixelated + `flat`: default 1 bin per pixel (bin size = pixel pitch).
-- Pixelated + `gaussian`: default `bins_per_pixel = [5, 5]` (5x5 bins per pixel).
-- Continuous: auto bin size from ray density over mask area.
-
-## Notes
-
-- Relative paths in TOML are resolved from the TOML file location.
-- PNG mask example config: `examples/png2ry/png_mask_frame_0001_flat_1rpp.toml`.
+```bash
+for cfg in examples/raygen/*.toml; do python3 projectionImageGen.py --config "$cfg"; done
+```
