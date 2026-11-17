@@ -691,20 +691,6 @@ def _local_uv_to_world_plane_coords(
 	)
 
 
-def _world_plane_coords_to_local_uv(
-	cfg: ProjectionConfig,
-	world_u_values: np.ndarray,
-	world_v_values: np.ndarray,
-) -> np.ndarray:
-	return np.ascontiguousarray(
-		np.column_stack([world_u_values - cfg.center[0], world_v_values - cfg.center[1]])
-	)
-
-
-def _mask_contains_world_plane(mask: _Mask, projection: ProjectionConfig, world_u: float, world_v: float) -> bool:
-	local_u = world_u - projection.center[0]
-	local_v = world_v - projection.center[1]
-	return mask.contains(local_u, local_v)
 
 
 def _mask_intensity_scale_local(mask: _Mask, local_u: float, local_v: float) -> float:
@@ -1132,22 +1118,6 @@ def _build_mask(cfg: RayGeneratorConfig) -> _Mask:
 	raise ValueError(f"Unsupported mask type: {m.type}")
 
 
-def _aa_activation_fraction(
-	mask: _Mask,
-	center_u: float,
-	center_v: float,
-	pixel_size: Vec2f,
-	aa_samples: int,
-) -> float:
-	su = pixel_size[0]
-	sv = pixel_size[1]
-	du = np.linspace(-su / 2.0, su / 2.0, aa_samples, endpoint=False) + su / (2.0 * aa_samples)
-	dv = np.linspace(-sv / 2.0, sv / 2.0, aa_samples, endpoint=False) + sv / (2.0 * aa_samples)
-	uu, vv = np.meshgrid(center_u + du, center_v + dv)
-	flat_u = uu.ravel()
-	flat_v = vv.ravel()
-	inside = np.fromiter((mask.contains(float(u), float(v)) for u, v in zip(flat_u, flat_v)), dtype=np.float64)
-	return float(np.mean(inside))
 
 
 def _aa_activation_fraction_world(
@@ -1372,40 +1342,8 @@ def _focused_max_spread(cfg: RayGeneratorConfig) -> float:
 	return distance * math.tan(theta)
 
 
-def _build_edges(values: np.ndarray, bin_size: float) -> np.ndarray:
-	if bin_size <= 0.0:
-		raise ValueError("Bin size must be > 0")
-
-	vmin = float(np.min(values))
-	vmax = float(np.max(values))
-	if math.isclose(vmin, vmax):
-		vmin -= 0.5 * bin_size
-		vmax += 0.5 * bin_size
-
-	start = vmin - 0.5 * bin_size
-	end = vmax + 0.5 * bin_size
-	n_bins = max(1, int(math.ceil((end - start) / bin_size)))
-	return np.linspace(start, start + n_bins * bin_size, n_bins + 1)
 
 
-def _build_edges_aligned(values: np.ndarray, bin_size: float, anchor: float) -> np.ndarray:
-	if bin_size <= 0.0:
-		raise ValueError("Bin size must be > 0")
-
-	vmin = float(np.min(values))
-	vmax = float(np.max(values))
-	if math.isclose(vmin, vmax):
-		vmin -= 0.5 * bin_size
-		vmax += 0.5 * bin_size
-
-	first_bin = math.floor((vmin - anchor) / bin_size)
-	last_bin = math.ceil((vmax - anchor) / bin_size)
-	if last_bin <= first_bin:
-		last_bin = first_bin + 1
-
-	start = anchor + first_bin * bin_size
-	n_bins = int(last_bin - first_bin)
-	return start + np.arange(n_bins + 1, dtype=np.float64) * bin_size
 
 
 def _pixel_bin_anchors(cfg: RayGeneratorConfig, mask: _Mask) -> tuple[float, float]:
@@ -1488,50 +1426,6 @@ def _intensity_map_from_edges(
 	return intensity, u_edges, v_edges
 
 
-def _save_intensity_png(
-	points_uv: np.ndarray,
-	energies: np.ndarray,
-	bin_size_u: float,
-	bin_size_v: float,
-	out_png: Path,
-	title: str,
-	axis_limits: tuple[float, float, float, float] | None = None,
-	edges_u: np.ndarray | None = None,
-	edges_v: np.ndarray | None = None,
-	vmin: float | None = None,
-	vmax: float | None = None,
-) -> None:
-	if points_uv.shape[0] == 0:
-		raise RuntimeError("Cannot save intensity map for empty point set.")
-
-	if edges_u is None:
-		edges_u = _build_edges(points_uv[:, 0], bin_size_u)
-	if edges_v is None:
-		edges_v = _build_edges(points_uv[:, 1], bin_size_v)
-
-	intensity, u_edges, v_edges = _intensity_map_from_edges(points_uv, energies, edges_u, edges_v)
-
-	fig, ax = plt.subplots(figsize=(7, 5))
-	im = ax.imshow(
-		intensity,
-		extent=[u_edges[0], u_edges[-1], v_edges[0], v_edges[-1]],
-		origin="lower",
-		cmap="inferno",
-		interpolation="nearest",
-		vmin=vmin,
-		vmax=vmax,
-	)
-	ax.set_xlabel("u")
-	ax.set_ylabel("v")
-	if axis_limits is not None:
-		u_min, u_max, v_min, v_max = axis_limits
-		ax.set_xlim(u_min, u_max)
-		ax.set_ylim(v_min, v_max)
-	ax.set_title(title)
-	fig.colorbar(im, ax=ax, label="Intensity [W/m^2]")
-	fig.tight_layout()
-	fig.savefig(out_png, dpi=200)
-	plt.close(fig)
 
 
 def _save_intensity_map_png(
@@ -1633,13 +1527,6 @@ def _save_focused_comparison_png(
 ) -> None:
 	if projection_uv.shape[0] == 0 or focus_uv.shape[0] == 0:
 		raise RuntimeError("Cannot save focused comparison map for empty point set.")
-
-	if edges_u is None or edges_v is None:
-		shared_uv = np.vstack((projection_uv, focus_uv))
-		if edges_u is None:
-			edges_u = _build_edges(shared_uv[:, 0], bin_size_u)
-		if edges_v is None:
-			edges_v = _build_edges(shared_uv[:, 1], bin_size_v)
 
 	projection_intensity, u_edges, v_edges = _intensity_map_from_edges(
 		projection_uv,
