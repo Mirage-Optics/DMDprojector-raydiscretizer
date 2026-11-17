@@ -683,14 +683,6 @@ def _world_to_local_uv(cfg: ProjectionConfig, world_points: np.ndarray) -> np.nd
 	return np.ascontiguousarray(np.column_stack([u, v]))
 
 
-def _local_uv_to_world_plane_coords(
-	cfg: ProjectionConfig,
-	u_values: np.ndarray,
-	v_values: np.ndarray,
-) -> np.ndarray:
-	return np.ascontiguousarray(
-		np.column_stack([u_values + cfg.center[0], v_values + cfg.center[1]])
-	)
 
 
 
@@ -1632,9 +1624,6 @@ def run(config_path: Path, cfg: RayGeneratorConfig | None = None) -> None:
 	avg_focus_edges_v: np.ndarray | None = None
 	single_focus_intensity: np.ndarray | None = None
 
-	avg_plane_intensity_world: np.ndarray | None = None
-	avg_edges_u_world: np.ndarray | None = None
-	avg_edges_v_world: np.ndarray | None = None
 	avg_count = 0
 
 	for batch_idx in range(cfg.output.batch_count):
@@ -1720,16 +1709,8 @@ def run(config_path: Path, cfg: RayGeneratorConfig | None = None) -> None:
 		)
 
 		focus_intensity: np.ndarray | None = None
-		avg_batch_intensity = projection_intensity
 		avg_batch_edges_u = map_edges_u
 		avg_batch_edges_v = map_edges_v
-		avg_batch_points_world = _local_uv_to_world_plane_coords(
-			cfg.projection,
-			projection_uv[:, 0],
-			projection_uv[:, 1],
-		)
-		avg_batch_edges_u_world = avg_batch_edges_u + cfg.projection.center[0]
-		avg_batch_edges_v_world = avg_batch_edges_v + cfg.projection.center[1]
 		if cfg.focus.mode == "focused":
 			if shared_edges_u is None or shared_edges_v is None:
 				raise RuntimeError("Focused averaging requires shared map edges")
@@ -1739,21 +1720,6 @@ def run(config_path: Path, cfg: RayGeneratorConfig | None = None) -> None:
 				shared_edges_u,
 				shared_edges_v,
 			)
-			avg_batch_intensity = focus_intensity
-			avg_batch_points_world = _local_uv_to_world_plane_coords(
-				cfg.projection,
-				focus_uv[:, 0],
-				focus_uv[:, 1],
-			)
-			avg_batch_edges_u_world = avg_batch_edges_u + cfg.projection.center[0]
-			avg_batch_edges_v_world = avg_batch_edges_v + cfg.projection.center[1]
-
-		avg_batch_intensity_world, map_edges_u_world, map_edges_v_world = _intensity_map_from_edges(
-			avg_batch_points_world,
-			energies,
-			avg_batch_edges_u_world,
-			avg_batch_edges_v_world,
-		)
 
 		if avg_projection_intensity is None:
 			avg_projection_intensity = np.zeros_like(projection_intensity)
@@ -1786,18 +1752,6 @@ def run(config_path: Path, cfg: RayGeneratorConfig | None = None) -> None:
 					raise RuntimeError("Focus map bins changed across batches; cannot compute average map")
 			avg_focus_intensity += focus_intensity
 
-		if avg_plane_intensity_world is None:
-			avg_plane_intensity_world = np.zeros_like(avg_batch_intensity_world)
-			avg_edges_u_world = map_edges_u_world.copy()
-			avg_edges_v_world = map_edges_v_world.copy()
-		else:
-			if avg_plane_intensity_world is None or avg_edges_u_world is None or avg_edges_v_world is None:
-				raise RuntimeError("World-coordinate average intensity accumulator is in invalid state")
-			if avg_batch_intensity_world.shape != avg_plane_intensity_world.shape:
-				raise RuntimeError("World-coordinate map shape changed across batches; cannot compute average map")
-			if not np.allclose(map_edges_u_world, avg_edges_u_world) or not np.allclose(map_edges_v_world, avg_edges_v_world):
-				raise RuntimeError("World-coordinate map bins changed across batches; cannot compute average map")
-		avg_plane_intensity_world += avg_batch_intensity_world
 		avg_count += 1
 
 		if cfg.focus.mode == "focused":
@@ -1843,8 +1797,6 @@ def run(config_path: Path, cfg: RayGeneratorConfig | None = None) -> None:
 	):
 		if avg_projection_edges_u is None or avg_projection_edges_v is None or single_projection_intensity is None:
 			raise RuntimeError("Projection average post-processing failed due to missing map state")
-		if avg_plane_intensity_world is None or avg_edges_u_world is None or avg_edges_v_world is None:
-			raise RuntimeError("World-coordinate average post-processing failed due to missing bin edges")
 
 		single_projection_for_png = single_projection_intensity
 		single_focus_for_png = single_focus_intensity
@@ -1881,7 +1833,6 @@ def run(config_path: Path, cfg: RayGeneratorConfig | None = None) -> None:
 		avg_projection_intensity /= float(avg_count)
 		if avg_focus_intensity is not None:
 			avg_focus_intensity /= float(avg_count)
-		avg_plane_intensity_world /= float(avg_count)
 		base_stem = Path(cfg.output.output_filename).stem
 		projection_average_base = cfg.output.output_folder / f"{base_stem}_projection_average"
 		projection_average_png = projection_average_base.with_suffix(".png")
@@ -1895,18 +1846,8 @@ def run(config_path: Path, cfg: RayGeneratorConfig | None = None) -> None:
 			focus_average_png = focus_average_base.with_suffix(".png")
 			focus_average_npz = focus_average_base.with_suffix(".npz")
 
-		average_plane_label = "focus" if cfg.focus.mode == "focused" else "projection"
-		average_world_base = cfg.output.output_folder / f"{Path(cfg.output.output_filename).stem}_{average_plane_label}_average_world"
-		average_world_png = average_world_base.with_suffix(".png")
-		average_world_npz = average_world_base.with_suffix(".npz")
 		plane_u_min, plane_u_max, plane_v_min, plane_v_max = _projection_plane_limits(cfg.projection)
 		axis_limits = (plane_u_min, plane_u_max, plane_v_min, plane_v_max)
-		axis_limits_world = (
-			plane_u_min + cfg.projection.center[0],
-			plane_u_max + cfg.projection.center[0],
-			plane_v_min + cfg.projection.center[1],
-			plane_v_max + cfg.projection.center[1],
-		)
 		if single_projection_for_png is None:
 			raise RuntimeError("Projection comparison PNG is missing a single-sample map")
 
@@ -1945,27 +1886,11 @@ def run(config_path: Path, cfg: RayGeneratorConfig | None = None) -> None:
 				u_edges=avg_focus_edges_u,
 				v_edges=avg_focus_edges_v,
 			)
-		_save_intensity_map_png(
-			avg_plane_intensity_world,
-			avg_edges_u_world,
-			avg_edges_v_world,
-			average_world_png,
-			f"Average {average_plane_label} intensity map in world coordinates ({avg_count} batches)",
-			axis_limits=axis_limits_world,
-		)
-		np.savez_compressed(
-			average_world_npz,
-			intensity=avg_plane_intensity_world,
-			u_world_edges=avg_edges_u_world,
-			v_world_edges=avg_edges_v_world,
-		)
 		print(f"Saved: {projection_average_png}")
 		print(f"Saved: {projection_average_npz}")
 		if focus_average_png is not None and focus_average_npz is not None:
 			print(f"Saved: {focus_average_png}")
 			print(f"Saved: {focus_average_npz}")
-		print(f"Saved: {average_world_png}")
-		print(f"Saved: {average_world_npz}")
 
 
 def validate_config(config_path: Path) -> RayGeneratorConfig:
