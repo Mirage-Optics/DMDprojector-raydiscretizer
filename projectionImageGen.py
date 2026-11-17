@@ -217,36 +217,20 @@ def _parse_vec2_positive_int_or_scalar(value: Any, name: str) -> Vec2i:
 	raise ValueError(f"'{name}' must be a positive integer or 2-value integer array.")
 
 
-def _parse_vec2_nonnegative_float_or_scalar(value: Any, name: str) -> Vec2f:
+def _parse_vec2_float_or_scalar(value: Any, name: str, positive: bool) -> Vec2f:
+	parse = _parse_positive_float if positive else _parse_nonnegative_float
+	error = f"'{name}' must be a {'positive' if positive else 'non-negative'} number or 2-value numeric array."
 	if isinstance(value, bool):
-		raise ValueError(f"'{name}' must be a non-negative number or 2-value numeric array.")
+		raise ValueError(error)
 
 	if isinstance(value, (int, float)):
-		n = _parse_nonnegative_float(value, name)
+		n = parse(value, name)
 		return n, n
 
 	if isinstance(value, (list, tuple)) and len(value) == 2:
-		n0 = _parse_nonnegative_float(value[0], f"{name}[0]")
-		n1 = _parse_nonnegative_float(value[1], f"{name}[1]")
-		return n0, n1
+		return parse(value[0], f"{name}[0]"), parse(value[1], f"{name}[1]")
 
-	raise ValueError(f"'{name}' must be a non-negative number or 2-value numeric array.")
-
-
-def _parse_vec2_positive_float_or_scalar(value: Any, name: str) -> Vec2f:
-	if isinstance(value, bool):
-		raise ValueError(f"'{name}' must be a positive number or 2-value numeric array.")
-
-	if isinstance(value, (int, float)):
-		n = _parse_positive_float(value, name)
-		return n, n
-
-	if isinstance(value, (list, tuple)) and len(value) == 2:
-		n0 = _parse_positive_float(value[0], f"{name}[0]")
-		n1 = _parse_positive_float(value[1], f"{name}[1]")
-		return n0, n1
-
-	raise ValueError(f"'{name}' must be a positive number or 2-value numeric array.")
+	raise ValueError(error)
 
 
 def _parse_axis(value: Any) -> str:
@@ -281,14 +265,7 @@ def _parse_mode(value: Any, name: str, allowed: set[str], aliases: dict[str, str
 	return mode
 
 
-def _resolve_output_folder(config_path: Path, raw_path: str) -> Path:
-	out_dir = Path(raw_path)
-	if not out_dir.is_absolute():
-		out_dir = (config_path.parent / out_dir).resolve()
-	return out_dir
-
-
-def _resolve_input_path(config_path: Path, raw_path: str) -> Path:
+def _resolve_path(config_path: Path, raw_path: str) -> Path:
 	path = Path(raw_path)
 	if not path.is_absolute():
 		path = (config_path.parent / path).resolve()
@@ -424,14 +401,14 @@ def load_config(config_path: Path) -> RayGeneratorConfig:
 	if png_path_raw is not None:
 		if not isinstance(png_path_raw, str) or not png_path_raw.strip():
 			raise ValueError("mask.png_path must be a non-empty string when provided.")
-		png_path = _resolve_input_path(config_path, png_path_raw.strip())
+		png_path = _resolve_path(config_path, png_path_raw.strip())
 
 	png_folder_raw = _get_first(mask_raw, ("png_folder", "image_folder", "folder", "frames_folder"))
 	png_folder: Path | None = None
 	if png_folder_raw is not None:
 		if not isinstance(png_folder_raw, str) or not png_folder_raw.strip():
 			raise ValueError("mask.png_folder must be a non-empty string when provided.")
-		png_folder = _resolve_input_path(config_path, png_folder_raw.strip())
+		png_folder = _resolve_path(config_path, png_folder_raw.strip())
 
 	png_frame_step = _parse_positive_int(
 		_get_first(mask_raw, ("frame_step", "png_frame_step", "every_nth_frame")) or 1,
@@ -528,7 +505,7 @@ def load_config(config_path: Path) -> RayGeneratorConfig:
 	)
 
 	output = OutputConfig(
-		output_folder=_resolve_output_folder(config_path, output_folder_raw),
+		output_folder=_resolve_path(config_path, output_folder_raw),
 		output_filename=output_filename,
 		batch_count=batch_count,
 		start_index=start_index,
@@ -578,14 +555,15 @@ def load_config(config_path: Path) -> RayGeneratorConfig:
 		sample_size = (
 			size
 			if sample_size_raw is None
-			else _parse_vec2_positive_float_or_scalar(sample_size_raw, "pixels.sample_size")
+			else _parse_vec2_float_or_scalar(sample_size_raw, "pixels.sample_size", positive=True)
 		)
 
-		projector_shift_max_pixels = _parse_vec2_nonnegative_float_or_scalar(
+		projector_shift_max_pixels = _parse_vec2_float_or_scalar(
 			_get_first(pixel_raw, ("projector_shift_max_pixels", "projection_shift_max_pixels", "plane_shift_max_pixels"))
 			if _get_first(pixel_raw, ("projector_shift_max_pixels", "projection_shift_max_pixels", "plane_shift_max_pixels")) is not None
 			else [0.0, 0.0],
 			"pixels.projector_shift_max_pixels",
+			positive=False,
 		)
 		activation_mode = _parse_mode(
 			_get_first(pixel_raw, ("activation_mode", "activation")) or "center",
