@@ -217,36 +217,20 @@ def _parse_vec2_positive_int_or_scalar(value: Any, name: str) -> Vec2i:
 	raise ValueError(f"'{name}' must be a positive integer or 2-value integer array.")
 
 
-def _parse_vec2_nonnegative_float_or_scalar(value: Any, name: str) -> Vec2f:
+def _parse_vec2_float_or_scalar(value: Any, name: str, positive: bool) -> Vec2f:
+	parse = _parse_positive_float if positive else _parse_nonnegative_float
+	error = f"'{name}' must be a {'positive' if positive else 'non-negative'} number or 2-value numeric array."
 	if isinstance(value, bool):
-		raise ValueError(f"'{name}' must be a non-negative number or 2-value numeric array.")
+		raise ValueError(error)
 
 	if isinstance(value, (int, float)):
-		n = _parse_nonnegative_float(value, name)
+		n = parse(value, name)
 		return n, n
 
 	if isinstance(value, (list, tuple)) and len(value) == 2:
-		n0 = _parse_nonnegative_float(value[0], f"{name}[0]")
-		n1 = _parse_nonnegative_float(value[1], f"{name}[1]")
-		return n0, n1
+		return parse(value[0], f"{name}[0]"), parse(value[1], f"{name}[1]")
 
-	raise ValueError(f"'{name}' must be a non-negative number or 2-value numeric array.")
-
-
-def _parse_vec2_positive_float_or_scalar(value: Any, name: str) -> Vec2f:
-	if isinstance(value, bool):
-		raise ValueError(f"'{name}' must be a positive number or 2-value numeric array.")
-
-	if isinstance(value, (int, float)):
-		n = _parse_positive_float(value, name)
-		return n, n
-
-	if isinstance(value, (list, tuple)) and len(value) == 2:
-		n0 = _parse_positive_float(value[0], f"{name}[0]")
-		n1 = _parse_positive_float(value[1], f"{name}[1]")
-		return n0, n1
-
-	raise ValueError(f"'{name}' must be a positive number or 2-value numeric array.")
+	raise ValueError(error)
 
 
 def _parse_axis(value: Any) -> str:
@@ -281,14 +265,7 @@ def _parse_mode(value: Any, name: str, allowed: set[str], aliases: dict[str, str
 	return mode
 
 
-def _resolve_output_folder(config_path: Path, raw_path: str) -> Path:
-	out_dir = Path(raw_path)
-	if not out_dir.is_absolute():
-		out_dir = (config_path.parent / out_dir).resolve()
-	return out_dir
-
-
-def _resolve_input_path(config_path: Path, raw_path: str) -> Path:
+def _resolve_path(config_path: Path, raw_path: str) -> Path:
 	path = Path(raw_path)
 	if not path.is_absolute():
 		path = (config_path.parent / path).resolve()
@@ -424,14 +401,14 @@ def load_config(config_path: Path) -> RayGeneratorConfig:
 	if png_path_raw is not None:
 		if not isinstance(png_path_raw, str) or not png_path_raw.strip():
 			raise ValueError("mask.png_path must be a non-empty string when provided.")
-		png_path = _resolve_input_path(config_path, png_path_raw.strip())
+		png_path = _resolve_path(config_path, png_path_raw.strip())
 
 	png_folder_raw = _get_first(mask_raw, ("png_folder", "image_folder", "folder", "frames_folder"))
 	png_folder: Path | None = None
 	if png_folder_raw is not None:
 		if not isinstance(png_folder_raw, str) or not png_folder_raw.strip():
 			raise ValueError("mask.png_folder must be a non-empty string when provided.")
-		png_folder = _resolve_input_path(config_path, png_folder_raw.strip())
+		png_folder = _resolve_path(config_path, png_folder_raw.strip())
 
 	png_frame_step = _parse_positive_int(
 		_get_first(mask_raw, ("frame_step", "png_frame_step", "every_nth_frame")) or 1,
@@ -528,7 +505,7 @@ def load_config(config_path: Path) -> RayGeneratorConfig:
 	)
 
 	output = OutputConfig(
-		output_folder=_resolve_output_folder(config_path, output_folder_raw),
+		output_folder=_resolve_path(config_path, output_folder_raw),
 		output_filename=output_filename,
 		batch_count=batch_count,
 		start_index=start_index,
@@ -578,14 +555,15 @@ def load_config(config_path: Path) -> RayGeneratorConfig:
 		sample_size = (
 			size
 			if sample_size_raw is None
-			else _parse_vec2_positive_float_or_scalar(sample_size_raw, "pixels.sample_size")
+			else _parse_vec2_float_or_scalar(sample_size_raw, "pixels.sample_size", positive=True)
 		)
 
-		projector_shift_max_pixels = _parse_vec2_nonnegative_float_or_scalar(
+		projector_shift_max_pixels = _parse_vec2_float_or_scalar(
 			_get_first(pixel_raw, ("projector_shift_max_pixels", "projection_shift_max_pixels", "plane_shift_max_pixels"))
 			if _get_first(pixel_raw, ("projector_shift_max_pixels", "projection_shift_max_pixels", "plane_shift_max_pixels")) is not None
 			else [0.0, 0.0],
 			"pixels.projector_shift_max_pixels",
+			positive=False,
 		)
 		activation_mode = _parse_mode(
 			_get_first(pixel_raw, ("activation_mode", "activation")) or "center",
@@ -1451,21 +1429,18 @@ def _save_intensity_map_png(
 	plt.close(fig)
 
 
-def _save_average_with_single_map_png(
-	single_intensity: np.ndarray,
-	average_intensity: np.ndarray,
+def _save_two_panel_png(
+	left: np.ndarray,
+	right: np.ndarray,
 	edges_u: np.ndarray,
 	edges_v: np.ndarray,
 	out_png: Path,
-	single_title: str,
-	average_title: str,
+	left_title: str,
+	right_title: str,
 	axis_limits: tuple[float, float, float, float] | None = None,
 ) -> None:
-	if single_intensity.shape != average_intensity.shape:
-		raise RuntimeError("Single-sample and average map shapes must match")
-
-	vmin = float(min(np.min(single_intensity), np.min(average_intensity)))
-	vmax = float(max(np.max(single_intensity), np.max(average_intensity)))
+	vmin = float(min(np.min(left), np.min(right)))
+	vmax = float(max(np.max(left), np.max(right)))
 	if math.isclose(vmin, vmax):
 		pad = max(1e-12, abs(vmin) * 1e-6)
 		vmin -= pad
@@ -1473,30 +1448,19 @@ def _save_average_with_single_map_png(
 
 	extent = [edges_u[0], edges_u[-1], edges_v[0], edges_v[-1]]
 	fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharex=True, sharey=True, constrained_layout=True)
-	im = axes[0].imshow(
-		single_intensity,
-		extent=extent,
-		origin="lower",
-		cmap="inferno",
-		interpolation="nearest",
-		vmin=vmin,
-		vmax=vmax,
-	)
-	axes[0].set_title(single_title)
-	axes[0].set_xlabel("u")
+	for ax, data, title in ((axes[0], left, left_title), (axes[1], right, right_title)):
+		im = ax.imshow(
+			data,
+			extent=extent,
+			origin="lower",
+			cmap="inferno",
+			interpolation="nearest",
+			vmin=vmin,
+			vmax=vmax,
+		)
+		ax.set_title(title)
+		ax.set_xlabel("u")
 	axes[0].set_ylabel("v")
-
-	axes[1].imshow(
-		average_intensity,
-		extent=extent,
-		origin="lower",
-		cmap="inferno",
-		interpolation="nearest",
-		vmin=vmin,
-		vmax=vmax,
-	)
-	axes[1].set_title(average_title)
-	axes[1].set_xlabel("u")
 
 	if axis_limits is not None:
 		u_min, u_max, v_min, v_max = axis_limits
@@ -1508,75 +1472,90 @@ def _save_average_with_single_map_png(
 	plt.close(fig)
 
 
-def _save_focused_comparison_png(
-	projection_uv: np.ndarray,
+def _map_edges(cfg: RayGeneratorConfig, mask: _Mask) -> tuple[np.ndarray, np.ndarray]:
+	"""Histogram edges for the diagnostic maps; identical for every batch and for both planes."""
+	n_rays = cfg.continuous.n_rays if cfg.continuous is not None else 1
+	bin_u, bin_v = _map_bin_size(cfg, mask, n_rays)
+	anchor_u = anchor_v = None
+	if cfg.emission.origin_type == "pixelated":
+		anchor_u, anchor_v = _pixel_bin_anchors(cfg, mask)
+	if cfg.focus.mode == "focused" and _focused_max_spread(cfg) < 0.5 * min(bin_u, bin_v):
+		print(
+			"Warning: focused spread in projection plane is smaller than map bin size; "
+			"projection/focus PNGs may look identical. "
+			"Increase focus.cone_half_angle_deg or use smaller pixel/bin size."
+		)
+	u_min, u_max, v_min, v_max = _projection_plane_limits(cfg.projection)
+	return (
+		_build_edges_for_limits(u_min, u_max, bin_u, anchor_u),
+		_build_edges_for_limits(v_min, v_max, bin_v, anchor_v),
+	)
+
+
+def _plane_maps(
+	cfg: RayGeneratorConfig,
+	origins: np.ndarray,
 	focus_uv: np.ndarray,
 	energies: np.ndarray,
-	bin_size_u: float,
-	bin_size_v: float,
-	out_png: Path,
-	axis_limits: tuple[float, float, float, float] | None = None,
-	edges_u: np.ndarray | None = None,
-	edges_v: np.ndarray | None = None,
+	edges: tuple[np.ndarray, np.ndarray],
+) -> dict[str, np.ndarray]:
+	"""Intensity maps keyed by plane: always 'projection', plus 'focus' for focused rays."""
+	projection_uv = _world_to_local_uv(cfg.projection, origins)
+	maps = {"projection": _intensity_map_from_edges(projection_uv, energies, *edges)[0]}
+	if cfg.focus.mode == "focused":
+		maps["focus"] = _intensity_map_from_edges(focus_uv, energies, *edges)[0]
+	return maps
+
+
+def _save_batch_map_png(
+	cfg: RayGeneratorConfig,
+	out_path: Path,
+	maps: dict[str, np.ndarray],
+	edges: tuple[np.ndarray, np.ndarray],
 ) -> None:
-	if projection_uv.shape[0] == 0 or focus_uv.shape[0] == 0:
-		raise RuntimeError("Cannot save focused comparison map for empty point set.")
+	limits = _projection_plane_limits(cfg.projection)
+	if "focus" in maps:
+		png = out_path.with_name(f"{out_path.stem}_projection_focus.png")
+		_save_two_panel_png(maps["projection"], maps["focus"], *edges, png, "Projection plane", "Focus plane", limits)
+	else:
+		png = out_path.with_name(f"{out_path.stem}_projection.png")
+		_save_intensity_map_png(maps["projection"], *edges, png, "Intensity map in projection plane", axis_limits=limits)
+	print(f"Saved: {png}")
 
-	projection_intensity, u_edges, v_edges = _intensity_map_from_edges(
-		projection_uv,
-		energies,
-		edges_u,
-		edges_v,
-	)
-	focus_intensity, _, _ = _intensity_map_from_edges(
-		focus_uv,
-		energies,
-		edges_u,
-		edges_v,
-	)
 
-	vmin = float(min(np.min(projection_intensity), np.min(focus_intensity)))
-	vmax = float(max(np.max(projection_intensity), np.max(focus_intensity)))
-	if math.isclose(vmin, vmax):
-		pad = max(1e-12, abs(vmin) * 1e-6)
-		vmin -= pad
-		vmax += pad
+def _save_average_maps(
+	cfg: RayGeneratorConfig,
+	mask: _Mask,
+	edges: tuple[np.ndarray, np.ndarray],
+	sums: dict[str, np.ndarray],
+	first: dict[str, np.ndarray],
+) -> None:
+	n_batches = cfg.output.batch_count
+	single, single_title = first, "Single sample {} intensity (batch 0)"
+	if cfg.emission.origin_type == "pixelated":
+		# Compare the average against an unshifted sample rather than batch 0.
+		rng = np.random.default_rng(cfg.output.seed)
+		origins, _, energies, focus_uv = _generate_pixelated_rays(cfg, mask, rng, projector_shift_uv=(0.0, 0.0))
+		single = _plane_maps(cfg, origins, focus_uv, energies, edges)
+		single_title = "Centered {} intensity (no shift)"
 
-	extent = [u_edges[0], u_edges[-1], v_edges[0], v_edges[-1]]
-	fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharex=True, sharey=True, constrained_layout=True)
-	im = axes[0].imshow(
-		projection_intensity,
-		extent=extent,
-		origin="lower",
-		cmap="inferno",
-		interpolation="nearest",
-		vmin=vmin,
-		vmax=vmax,
-	)
-	axes[0].set_title("Projection plane")
-	axes[0].set_xlabel("u")
-	axes[0].set_ylabel("v")
-
-	axes[1].imshow(
-		focus_intensity,
-		extent=extent,
-		origin="lower",
-		cmap="inferno",
-		interpolation="nearest",
-		vmin=vmin,
-		vmax=vmax,
-	)
-	axes[1].set_title("Focus plane")
-	axes[1].set_xlabel("u")
-
-	if axis_limits is not None:
-		u_min, u_max, v_min, v_max = axis_limits
-		axes[0].set_xlim(u_min, u_max)
-		axes[0].set_ylim(v_min, v_max)
-
-	fig.colorbar(im, ax=axes, label="Intensity [W/m^2]")
-	fig.savefig(out_png, dpi=200)
-	plt.close(fig)
+	limits = _projection_plane_limits(cfg.projection)
+	stem = Path(cfg.output.output_filename).stem
+	for plane, total in sums.items():
+		average = total / float(n_batches)
+		base = cfg.output.output_folder / f"{stem}_{plane}_average"
+		_save_two_panel_png(
+			single[plane],
+			average,
+			*edges,
+			base.with_suffix(".png"),
+			single_title.format(plane),
+			f"Average {plane} intensity ({n_batches} batches)",
+			limits,
+		)
+		np.savez_compressed(base.with_suffix(".npz"), intensity=average, u_edges=edges[0], v_edges=edges[1])
+		print(f"Saved: {base.with_suffix('.png')}")
+		print(f"Saved: {base.with_suffix('.npz')}")
 
 
 def run(config_path: Path, cfg: RayGeneratorConfig | None = None) -> None:
@@ -1614,17 +1593,9 @@ def run(config_path: Path, cfg: RayGeneratorConfig | None = None) -> None:
 			f"({cfg.pixel.projector_shift_max_pixels[0]:.3f}, {cfg.pixel.projector_shift_max_pixels[1]:.3f})"
 		)
 
-	avg_projection_intensity: np.ndarray | None = None
-	avg_projection_edges_u: np.ndarray | None = None
-	avg_projection_edges_v: np.ndarray | None = None
-	single_projection_intensity: np.ndarray | None = None
-
-	avg_focus_intensity: np.ndarray | None = None
-	avg_focus_edges_u: np.ndarray | None = None
-	avg_focus_edges_v: np.ndarray | None = None
-	single_focus_intensity: np.ndarray | None = None
-
-	avg_count = 0
+	edges = None if cfg.output.rays_only else _map_edges(cfg, mask)
+	sums: dict[str, np.ndarray] = {}
+	first: dict[str, np.ndarray] = {}
 
 	for batch_idx in range(cfg.output.batch_count):
 		seed = None if cfg.output.seed is None else cfg.output.seed + batch_idx
@@ -1650,247 +1621,25 @@ def run(config_path: Path, cfg: RayGeneratorConfig | None = None) -> None:
 
 		_write_ry(out_path, origins, directions, energies, config_path)
 
-		if cfg.output.rays_only:
-			if cfg.emission.origin_type == "pixelated":
-				print(
-					f"batch {batch_idx}: projector shift [u, v] = "
-					f"({projector_shift_uv[0]:.6f}, {projector_shift_uv[1]:.6f})"
-				)
-			print(
-				f"Wrote {out_path} | nrays={origins.shape[0]} | "
-				f"energy sum={energies.sum():.6e}"
-			)
-			continue
-
-		projection_uv = _world_to_local_uv(cfg.projection, origins)
-		bin_u, bin_v = _map_bin_size(cfg, mask, origins.shape[0])
-		plane_u_min, plane_u_max, plane_v_min, plane_v_max = _projection_plane_limits(cfg.projection)
-		axis_limits = (plane_u_min, plane_u_max, plane_v_min, plane_v_max)
-		aligned_anchor_u = None
-		aligned_anchor_v = None
-		if cfg.emission.origin_type == "pixelated":
-			aligned_anchor_u, aligned_anchor_v = _pixel_bin_anchors(cfg, mask)
-
-		shared_edges_u = None
-		shared_edges_v = None
-		if cfg.focus.mode == "focused":
-			max_spread = _focused_max_spread(cfg)
-			min_bin = min(bin_u, bin_v)
-			if max_spread < 0.5 * min_bin:
-				print(
-					"Warning: focused spread in projection plane is smaller than map bin size; "
-					"projection/focus PNGs may look identical. "
-					"Increase focus.cone_half_angle_deg or use smaller pixel/bin size."
-				)
-			if aligned_anchor_u is not None and aligned_anchor_v is not None:
-				shared_edges_u = _build_edges_for_limits(plane_u_min, plane_u_max, bin_u, aligned_anchor_u)
-				shared_edges_v = _build_edges_for_limits(plane_v_min, plane_v_max, bin_v, aligned_anchor_v)
-			else:
-				shared_edges_u = _build_edges_for_limits(plane_u_min, plane_u_max, bin_u)
-				shared_edges_v = _build_edges_for_limits(plane_v_min, plane_v_max, bin_v)
-
-		projection_edges_u = None
-		projection_edges_v = None
-		if aligned_anchor_u is not None and aligned_anchor_v is not None:
-			projection_edges_u = _build_edges_for_limits(plane_u_min, plane_u_max, bin_u, aligned_anchor_u)
-			projection_edges_v = _build_edges_for_limits(plane_v_min, plane_v_max, bin_v, aligned_anchor_v)
-		else:
-			projection_edges_u = _build_edges_for_limits(plane_u_min, plane_u_max, bin_u)
-			projection_edges_v = _build_edges_for_limits(plane_v_min, plane_v_max, bin_v)
-
-		projection_png = out_path.with_name(f"{out_path.stem}_projection.png")
-		comparison_png = out_path.with_name(f"{out_path.stem}_projection_focus.png")
-
-		projection_intensity, map_edges_u, map_edges_v = _intensity_map_from_edges(
-			projection_uv,
-			energies,
-			projection_edges_u,
-			projection_edges_v,
-		)
-
-		focus_intensity: np.ndarray | None = None
-		avg_batch_edges_u = map_edges_u
-		avg_batch_edges_v = map_edges_v
-		if cfg.focus.mode == "focused":
-			if shared_edges_u is None or shared_edges_v is None:
-				raise RuntimeError("Focused averaging requires shared map edges")
-			focus_intensity, avg_batch_edges_u, avg_batch_edges_v = _intensity_map_from_edges(
-				focus_uv,
-				energies,
-				shared_edges_u,
-				shared_edges_v,
-			)
-
-		if avg_projection_intensity is None:
-			avg_projection_intensity = np.zeros_like(projection_intensity)
-			avg_projection_edges_u = map_edges_u.copy()
-			avg_projection_edges_v = map_edges_v.copy()
-			single_projection_intensity = projection_intensity.copy()
-		else:
-			if avg_projection_edges_u is None or avg_projection_edges_v is None:
-				raise RuntimeError("Projection average intensity accumulator is in invalid state")
-			if projection_intensity.shape != avg_projection_intensity.shape:
-				raise RuntimeError("Projection map shape changed across batches; cannot compute average map")
-			if not np.allclose(map_edges_u, avg_projection_edges_u) or not np.allclose(map_edges_v, avg_projection_edges_v):
-				raise RuntimeError("Projection map bins changed across batches; cannot compute average map")
-		avg_projection_intensity += projection_intensity
-
-		if cfg.focus.mode == "focused":
-			if focus_intensity is None:
-				raise RuntimeError("Focused averaging map is missing")
-			if avg_focus_intensity is None:
-				avg_focus_intensity = np.zeros_like(focus_intensity)
-				avg_focus_edges_u = avg_batch_edges_u.copy()
-				avg_focus_edges_v = avg_batch_edges_v.copy()
-				single_focus_intensity = focus_intensity.copy()
-			else:
-				if avg_focus_edges_u is None or avg_focus_edges_v is None:
-					raise RuntimeError("Focus average intensity accumulator is in invalid state")
-				if focus_intensity.shape != avg_focus_intensity.shape:
-					raise RuntimeError("Focus map shape changed across batches; cannot compute average map")
-				if not np.allclose(avg_batch_edges_u, avg_focus_edges_u) or not np.allclose(avg_batch_edges_v, avg_focus_edges_v):
-					raise RuntimeError("Focus map bins changed across batches; cannot compute average map")
-			avg_focus_intensity += focus_intensity
-
-		avg_count += 1
-
-		if cfg.focus.mode == "focused":
-			_save_focused_comparison_png(
-				projection_uv,
-				focus_uv,
-				energies,
-				bin_u,
-				bin_v,
-				comparison_png,
-				axis_limits,
-				shared_edges_u,
-				shared_edges_v,
-			)
-			print(f"Saved: {comparison_png}")
-		else:
-			_save_intensity_map_png(
-				projection_intensity,
-				map_edges_u,
-				map_edges_v,
-				projection_png,
-				"Intensity map in projection plane",
-				axis_limits=axis_limits,
-			)
-			print(f"Saved: {projection_png}")
+		if edges is not None:
+			maps = _plane_maps(cfg, origins, focus_uv, energies, edges)
+			_save_batch_map_png(cfg, out_path, maps, edges)
+			for plane, intensity in maps.items():
+				sums[plane] = sums[plane] + intensity if plane in sums else intensity.copy()
+				first.setdefault(plane, intensity)
 
 		if cfg.emission.origin_type == "pixelated":
 			print(
 				f"batch {batch_idx}: projector shift [u, v] = "
 				f"({projector_shift_uv[0]:.6f}, {projector_shift_uv[1]:.6f})"
 			)
-
 		print(
 			f"Wrote {out_path} | nrays={origins.shape[0]} | "
 			f"energy sum={energies.sum():.6e}"
 		)
 
-	if (
-		not cfg.output.rays_only
-		and cfg.output.save_average_maps
-		and avg_projection_intensity is not None
-		and avg_count > 0
-	):
-		if avg_projection_edges_u is None or avg_projection_edges_v is None or single_projection_intensity is None:
-			raise RuntimeError("Projection average post-processing failed due to missing map state")
-
-		single_projection_for_png = single_projection_intensity
-		single_focus_for_png = single_focus_intensity
-		single_projection_title = "Single sample projection intensity (batch 0)"
-		single_focus_title = "Single sample focus intensity (batch 0)"
-		if cfg.emission.origin_type == "pixelated":
-			centered_seed = cfg.output.seed
-			centered_rng = np.random.default_rng(centered_seed)
-			centered_origins, _, centered_energies, centered_focus_uv = _generate_pixelated_rays(
-				cfg,
-				mask,
-				centered_rng,
-				projector_shift_uv=(0.0, 0.0),
-			)
-			centered_projection_uv = _world_to_local_uv(cfg.projection, centered_origins)
-			single_projection_for_png, _, _ = _intensity_map_from_edges(
-				centered_projection_uv,
-				centered_energies,
-				avg_projection_edges_u,
-				avg_projection_edges_v,
-			)
-			single_projection_title = "Centered projection intensity (no shift)"
-			if cfg.focus.mode == "focused":
-				if avg_focus_edges_u is None or avg_focus_edges_v is None:
-					raise RuntimeError("Focus average post-processing failed due to missing bin edges")
-				single_focus_for_png, _, _ = _intensity_map_from_edges(
-					centered_focus_uv,
-					centered_energies,
-					avg_focus_edges_u,
-					avg_focus_edges_v,
-				)
-				single_focus_title = "Centered focus intensity (no shift)"
-
-		avg_projection_intensity /= float(avg_count)
-		if avg_focus_intensity is not None:
-			avg_focus_intensity /= float(avg_count)
-		base_stem = Path(cfg.output.output_filename).stem
-		projection_average_base = cfg.output.output_folder / f"{base_stem}_projection_average"
-		projection_average_png = projection_average_base.with_suffix(".png")
-		projection_average_npz = projection_average_base.with_suffix(".npz")
-		focus_average_png: Path | None = None
-		focus_average_npz: Path | None = None
-		if cfg.focus.mode == "focused":
-			if avg_focus_intensity is None or avg_focus_edges_u is None or avg_focus_edges_v is None or single_focus_intensity is None:
-				raise RuntimeError("Focus average post-processing failed due to missing map state")
-			focus_average_base = cfg.output.output_folder / f"{base_stem}_focus_average"
-			focus_average_png = focus_average_base.with_suffix(".png")
-			focus_average_npz = focus_average_base.with_suffix(".npz")
-
-		plane_u_min, plane_u_max, plane_v_min, plane_v_max = _projection_plane_limits(cfg.projection)
-		axis_limits = (plane_u_min, plane_u_max, plane_v_min, plane_v_max)
-		if single_projection_for_png is None:
-			raise RuntimeError("Projection comparison PNG is missing a single-sample map")
-
-		_save_average_with_single_map_png(
-			single_projection_for_png,
-			avg_projection_intensity,
-			avg_projection_edges_u,
-			avg_projection_edges_v,
-			projection_average_png,
-			single_projection_title,
-			f"Average projection intensity ({avg_count} batches)",
-			axis_limits=axis_limits,
-		)
-		np.savez_compressed(
-			projection_average_npz,
-			intensity=avg_projection_intensity,
-			u_edges=avg_projection_edges_u,
-			v_edges=avg_projection_edges_v,
-		)
-		if focus_average_png is not None and focus_average_npz is not None and avg_focus_intensity is not None and avg_focus_edges_u is not None and avg_focus_edges_v is not None:
-			if single_focus_for_png is None:
-				raise RuntimeError("Focus comparison PNG is missing a single-sample map")
-			_save_average_with_single_map_png(
-				single_focus_for_png,
-				avg_focus_intensity,
-				avg_focus_edges_u,
-				avg_focus_edges_v,
-				focus_average_png,
-				single_focus_title,
-				f"Average focus intensity ({avg_count} batches)",
-				axis_limits=axis_limits,
-			)
-			np.savez_compressed(
-				focus_average_npz,
-				intensity=avg_focus_intensity,
-				u_edges=avg_focus_edges_u,
-				v_edges=avg_focus_edges_v,
-			)
-		print(f"Saved: {projection_average_png}")
-		print(f"Saved: {projection_average_npz}")
-		if focus_average_png is not None and focus_average_npz is not None:
-			print(f"Saved: {focus_average_png}")
-			print(f"Saved: {focus_average_npz}")
+	if edges is not None and cfg.output.save_average_maps:
+		_save_average_maps(cfg, mask, edges, sums, first)
 
 
 def validate_config(config_path: Path) -> RayGeneratorConfig:
