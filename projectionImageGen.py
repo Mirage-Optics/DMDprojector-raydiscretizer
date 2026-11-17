@@ -317,7 +317,7 @@ def _collect_png_frames(folder: Path, frame_step: int) -> list[Path]:
 	return selected
 
 
-def _config_for_png_frame(base_cfg: RayGeneratorConfig, frame_path: Path) -> RayGeneratorConfig:
+def _config_for_png_frame(base_cfg: RayGeneratorConfig, frame_path: Path, frame_idx: int) -> RayGeneratorConfig:
 	frame_mask = replace(base_cfg.mask, png_path=frame_path, png_folder=None)
 	frame_output = replace(
 		base_cfg.output,
@@ -326,6 +326,8 @@ def _config_for_png_frame(base_cfg: RayGeneratorConfig, frame_path: Path) -> Ray
 		append_index=False,
 		start_index=0,
 		zero_pad=0,
+		# Each frame runs with batch_count=1, so offset the seed per frame to avoid identical random streams.
+		seed=None if base_cfg.output.seed is None else base_cfg.output.seed + frame_idx,
 	)
 	return replace(base_cfg, mask=frame_mask, output=frame_output)
 
@@ -1708,7 +1710,7 @@ def run(config_path: Path, cfg: RayGeneratorConfig | None = None) -> None:
 				f"({len(frame_paths)} frames, step={cfg.mask.png_frame_step})"
 			)
 			for idx, frame_path in enumerate(frame_paths):
-				frame_cfg = _config_for_png_frame(cfg, frame_path)
+				frame_cfg = _config_for_png_frame(cfg, frame_path, idx)
 				print(f"Frame {idx + 1}/{len(frame_paths)}: {frame_path.name} -> {frame_path.stem}.ry")
 				run(config_path, frame_cfg)
 			return
@@ -2084,7 +2086,7 @@ def validate_config(config_path: Path) -> RayGeneratorConfig:
 	cfg_for_validation = cfg
 	if cfg.mask.type == "png" and cfg.mask.png_folder is not None:
 		frame_paths = _collect_png_frames(cfg.mask.png_folder, cfg.mask.png_frame_step)
-		cfg_for_validation = _config_for_png_frame(cfg, frame_paths[0])
+		cfg_for_validation = _config_for_png_frame(cfg, frame_paths[0], 0)
 	mask = _build_mask(cfg_for_validation)
 
 	if cfg_for_validation.emission.origin_type == "pixelated":
