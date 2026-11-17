@@ -362,7 +362,7 @@ def load_config(config_path: Path) -> RayGeneratorConfig:
 		width=_parse_positive_float(_get_first(projection_raw, ("width",)), "projection.width"),
 		height=_parse_positive_float(_get_first(projection_raw, ("height",)), "projection.height"),
 		axis=_parse_axis(_get_first(projection_raw, ("axis",))),
-		direction=_parse_direction(_get_first(projection_raw, ("direction", 1))),
+		direction=_parse_direction(projection_raw.get("direction", 1)),
 		focus_plane_position=_parse_float(
 			_get_first(projection_raw, ("focus_plane_position", "focus_plane", "focus_pos")),
 			"projection.focus_plane_position",
