@@ -162,6 +162,8 @@ documents every key, and [`examples/raygen/`](examples/raygen) has more cases.
 
 ```text
 # ray file v1
+# original_area: <area>
+# original_intensity: <intensity>
 # format:
 # nrays
 # ox oy oz dx dy dz energy
@@ -171,7 +173,9 @@ ox oy oz dx dy dz energy
 ```
 
 To parse: skip lines starting with `#`, read the ray count, then one row per
-ray (origin, direction, energy).
+ray (origin, direction, energy). The `original_area` and `original_intensity`
+metadata record the mask area and configured base intensity used to generate
+the file.
 
 ## Running
 
