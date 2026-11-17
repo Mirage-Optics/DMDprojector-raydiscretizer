@@ -790,7 +790,7 @@ def _gaussian_sigma(reported_size: float, size_type: str) -> float:
 	factors = {
 		"FWHM": 2.355,
 		"sigma": 1.0,
-		"1/e2_diameter": 3.398,
+		"1/e2_diameter": 4.0,  # intensity exp(-r^2/2σ^2) falls to e^-2 at r = 2σ
 	}
 	if st not in factors:
 		raise ValueError("pixels.gaussian_size_type must be one of: FWHM, sigma, 1/e2_diameter")
