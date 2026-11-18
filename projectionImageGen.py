@@ -96,6 +96,8 @@ class PixelConfig:
 	aa_samples: int
 	intensity_mode: str
 	gaussian_size_type: str
+	intensity_noise: float = 0.0
+	intensity_noise_seed: int = 0
 
 
 @dataclass(frozen=True)
@@ -572,6 +574,9 @@ def load_config(config_path: Path) -> RayGeneratorConfig:
 			bins_raw = [5, 5] if intensity_mode == "gaussian" else [1, 1]
 		bins_per_pixel = _parse_vec2_positive_int_or_scalar(bins_raw, "pixels.bins_per_pixel")
 		gaussian_size_type = str(_get_first(pixel_raw, ("gaussian_size_type", "size_type")) or "1/e2_diameter")
+		intensity_noise = float(_get_first(pixel_raw, ("intensity_noise", "pixel_intensity_noise")) or 0.0)
+		if not 0.0 <= intensity_noise < 0.5:
+			raise ValueError("pixels.intensity_noise must be in [0, 0.5) (relative rms of the static per-pixel factor)")
 
 		pixel = PixelConfig(
 			rays_per_pixel=_parse_positive_int(_get_first(pixel_raw, ("rays_per_pixel", "rpp")), "pixels.rays_per_pixel"),
@@ -583,6 +588,8 @@ def load_config(config_path: Path) -> RayGeneratorConfig:
 			aa_samples=_parse_positive_int(_get_first(pixel_raw, ("aa_samples", "antialias_samples")) or 8, "pixels.aa_samples"),
 			intensity_mode=intensity_mode,
 			gaussian_size_type=gaussian_size_type,
+			intensity_noise=intensity_noise,
+			intensity_noise_seed=int(_get_first(pixel_raw, ("intensity_noise_seed",)) or 0),
 		)
 
 	cfg = RayGeneratorConfig(
@@ -1190,8 +1197,8 @@ def _generate_pixelated_rays(
 	centers_v_world = centers_v + cfg.projection.center[1]
 
 	active_pixels: list[tuple[float, float, float]] = []
-	for cu, cu_world in zip(centers_u, centers_u_world):
-		for cv, cv_world in zip(centers_v, centers_v_world):
+	for iu, (cu, cu_world) in enumerate(zip(centers_u, centers_u_world)):
+		for iv, (cv, cv_world) in enumerate(zip(centers_v, centers_v_world)):
 			# Pixel centers are jittered in local UV; mask inclusion is evaluated in
 			# world-plane coordinates so the mask remains fixed in real space.
 			# For PNG masks, the activation value includes grayscale intensity.
@@ -1211,6 +1218,11 @@ def _generate_pixelated_rays(
 				continue
 
 			i_active = cfg.emission.base_intensity * fraction
+			if px.intensity_noise > 0.0:
+				# Static projector non-uniformity: fixed per pixel index, identical in every batch and independent of
+				# the ray seed and rays_per_pixel (a controlled seed for self-focusing studies).
+				xi = np.random.default_rng([px.intensity_noise_seed, iu, iv]).standard_normal()
+				i_active *= max(1.0 + px.intensity_noise * xi, 0.0)
 			if i_active <= 0.0:
 				continue
 			active_pixels.append((float(cu), float(cv), i_active))
