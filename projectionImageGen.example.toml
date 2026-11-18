@@ -89,6 +89,12 @@ intensity_mode = "flat"
 # intensity_mode = "gaussian"
 gaussian_size_type = "1/e2_diameter"
 
+# Static projector non-uniformity (optional): each pixel's intensity is multiplied by (1 + intensity_noise * xi),
+# xi ~ N(0, 1) drawn from (intensity_noise_seed, pixel index). The pattern is identical in every batch and does not
+# depend on [output].seed or rays_per_pixel, so it is a controlled seed (e.g. for self-focusing studies).
+intensity_noise = 0.0
+intensity_noise_seed = 0
+
 [output]
 output_folder = "./output"
 output_filename = "projection_rays.ry"
