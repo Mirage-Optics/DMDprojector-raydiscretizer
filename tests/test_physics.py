@@ -49,6 +49,16 @@ def test_flat_energy_equals_intensity_times_area(tmp_path):
 	assert math.isclose(energies.sum(), 2.0 * 100.0 * 60.0, rel_tol=1e-9)
 
 
+def test_ry_metadata_contains_original_area_and_intensity(tmp_path):
+	config_path = tmp_path / "c.toml"
+	cfg = _cfg(tmp_path, 'type = "rectangle"\nwidth = 100.0\nheight = 60.0')
+	g.run(config_path, cfg)
+
+	metadata = (tmp_path / "t.ry").read_text().splitlines()
+	assert "# original_area: 6.0000000000000000e+03" in metadata
+	assert "# original_intensity: 2.0000000000000000e+00" in metadata
+
+
 def test_gaussian_falls_to_e2_at_half_diameter():
 	sigma = g._gaussian_sigma(10.0, "1/e2_diameter")
 	assert math.isclose(math.exp(-((5.0 / sigma) ** 2) / 2.0), math.exp(-2.0), rel_tol=1e-6)
