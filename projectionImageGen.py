@@ -98,6 +98,9 @@ class PixelConfig:
 	gaussian_size_type: str
 	intensity_noise: float = 0.0
 	intensity_noise_seed: int = 0
+	intensity_modulation: float = 0.0
+	intensity_modulation_wavelength: float = 0.0
+	intensity_modulation_phase_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -577,6 +580,12 @@ def load_config(config_path: Path) -> RayGeneratorConfig:
 		intensity_noise = float(_get_first(pixel_raw, ("intensity_noise", "pixel_intensity_noise")) or 0.0)
 		if not 0.0 <= intensity_noise < 0.5:
 			raise ValueError("pixels.intensity_noise must be in [0, 0.5) (relative rms of the static per-pixel factor)")
+		intensity_modulation = float(_get_first(pixel_raw, ("intensity_modulation",)) or 0.0)
+		intensity_modulation_wavelength = float(_get_first(pixel_raw, ("intensity_modulation_wavelength",)) or 0.0)
+		if not 0.0 <= intensity_modulation < 1.0:
+			raise ValueError("pixels.intensity_modulation must be in [0, 1) (relative amplitude of the cosine factor)")
+		if intensity_modulation > 0.0 and intensity_modulation_wavelength <= 0.0:
+			raise ValueError("pixels.intensity_modulation_wavelength must be > 0 when intensity_modulation > 0")
 
 		pixel = PixelConfig(
 			rays_per_pixel=_parse_positive_int(_get_first(pixel_raw, ("rays_per_pixel", "rpp")), "pixels.rays_per_pixel"),
@@ -590,6 +599,9 @@ def load_config(config_path: Path) -> RayGeneratorConfig:
 			gaussian_size_type=gaussian_size_type,
 			intensity_noise=intensity_noise,
 			intensity_noise_seed=int(_get_first(pixel_raw, ("intensity_noise_seed",)) or 0),
+			intensity_modulation=intensity_modulation,
+			intensity_modulation_wavelength=intensity_modulation_wavelength,
+			intensity_modulation_phase_deg=float(_get_first(pixel_raw, ("intensity_modulation_phase_deg",)) or 0.0),
 		)
 
 	cfg = RayGeneratorConfig(
@@ -1223,6 +1235,11 @@ def _generate_pixelated_rays(
 				# the ray seed and rays_per_pixel (a controlled seed for self-focusing studies).
 				xi = np.random.default_rng([px.intensity_noise_seed, iu, iv]).standard_normal()
 				i_active *= max(1.0 + px.intensity_noise * xi, 0.0)
+			if px.intensity_modulation > 0.0:
+				# Static cosine along world v (the rotation axis for axis = y/x): a single-wavelength axial seed that
+				# survives the rotation integral, for measuring the self-focusing gain per wavelength.
+				arg = 2.0 * math.pi * cv_world / px.intensity_modulation_wavelength
+				i_active *= 1.0 + px.intensity_modulation * math.cos(arg + math.radians(px.intensity_modulation_phase_deg))
 			if i_active <= 0.0:
 				continue
 			active_pixels.append((float(cu), float(cv), i_active))
